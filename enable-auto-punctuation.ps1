@@ -8,7 +8,7 @@ after reboot/hibernate (known MS bug, Q&A 3915596).
 Usage:
   powershell -ExecutionPolicy Bypass -File .\enable-auto-punctuation.ps1              # apply punct_ON.reg + verify
   powershell -ExecutionPolicy Bypass -File .\enable-auto-punctuation.ps1 -Check       # print ON/OFF state only
-  powershell -ExecutionPolicy Bypass -File .\enable-auto-punctuation.ps1 -Schedule    # + scheduled task: logon + screen unlock
+  powershell -ExecutionPolicy Bypass -File .\enable-auto-punctuation.ps1 -Schedule    # + scheduled task: logon + screen unlock (requires elevation)
   powershell -ExecutionPolicy Bypass -File .\enable-auto-punctuation.ps1 -RemoveSchedule
 #>
 param(
@@ -61,10 +61,44 @@ if ($RemoveSchedule) {
 }
 
 if ($Schedule) {
-    $action   = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $PSCommandPath)
-    $logon    = New-ScheduledTaskTrigger -AtLogOn
-    $unlock   = New-CimInstance -Namespace 'Root/Microsoft/Windows/TaskScheduler' -ClassName MSFT_TaskSessionStateChangeTrigger -ClientOnly -Property @{ StateChange = 6 }
-    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $logon, $unlock -Settings $settings -Description 'Win+H: re-enable Automatic punctuation (CloudStore fix)' -Force | Out-Null
+    $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { Join-Path $PSScriptRoot 'enable-auto-punctuation.ps1' }
+    $xml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Win+H: re-enable Automatic punctuation (CloudStore fix)</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+    <SessionStateChangeTrigger>
+      <Enabled>true</Enabled>
+      <StateChange>SessionUnlock</StateChange>
+    </SessionStateChangeTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT2M</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>powershell.exe</Command>
+      <Arguments>-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "$scriptPath"</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"@
+    Register-ScheduledTask -TaskName $TaskName -Xml $xml -Force | Out-Null
     Write-Host "Scheduled task '$TaskName' registered: at logon + screen unlock"
 }
